@@ -6,6 +6,7 @@ from discord.ext import commands
 from dotenv import load_dotenv
 
 import database as db
+from cogs.finance import ConfirmDebtView
 
 load_dotenv()
 
@@ -24,6 +25,9 @@ class Bot(commands.Bot):
         await db.init_db(self.db_pool)
 
         await self.load_extension("cogs.finance")
+
+        # Re-attach persistent view so in-flight requests survive restarts
+        self.add_view(ConfirmDebtView(self))
 
         # Sync slash commands globally (can take up to 1 hour to propagate).
         # For instant updates during development, sync to a specific guild:

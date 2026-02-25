@@ -18,6 +18,56 @@ async def init_db(pool: asyncpg.Pool) -> None:
                 created_at  TIMESTAMPTZ     NOT NULL DEFAULT NOW()
             )
         """)
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS pending_requests (
+                message_id  BIGINT          PRIMARY KEY,
+                channel_id  BIGINT          NOT NULL,
+                creditor_id BIGINT          NOT NULL,
+                debtor_id   BIGINT          NOT NULL,
+                amount      DECIMAL(12, 2)  NOT NULL CHECK (amount > 0),
+                note        TEXT,
+                created_at  TIMESTAMPTZ     NOT NULL DEFAULT NOW()
+            )
+        """)
+
+
+# ---------- pending requests ----------
+
+async def add_pending_request(
+    pool: asyncpg.Pool,
+    *,
+    message_id: int,
+    channel_id: int,
+    creditor_id: int,
+    debtor_id: int,
+    amount: float,
+    note: str | None,
+) -> None:
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO pending_requests
+                (message_id, channel_id, creditor_id, debtor_id, amount, note)
+            VALUES ($1, $2, $3, $4, $5, $6)
+            """,
+            message_id, channel_id, creditor_id, debtor_id, amount, note,
+        )
+
+
+async def get_pending_request(
+    pool: asyncpg.Pool, message_id: int
+) -> asyncpg.Record | None:
+    async with pool.acquire() as conn:
+        return await conn.fetchrow(
+            "SELECT * FROM pending_requests WHERE message_id = $1", message_id
+        )
+
+
+async def delete_pending_request(pool: asyncpg.Pool, message_id: int) -> None:
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "DELETE FROM pending_requests WHERE message_id = $1", message_id
+        )
 
 
 # ---------- write operations ----------
