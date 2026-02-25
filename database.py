@@ -238,8 +238,9 @@ async def apply_payment(
             for row in rows:
                 if remaining <= 0:
                     break
-                if remaining >= row["amount"]:
-                    remaining -= row["amount"]
+                row_amount = float(row["amount"])
+                if remaining >= row_amount:
+                    remaining -= row_amount
                     await conn.execute("DELETE FROM debts WHERE id = $1", row["id"])
                 else:
                     await conn.execute(
