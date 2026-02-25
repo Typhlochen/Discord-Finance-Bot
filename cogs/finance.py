@@ -321,7 +321,7 @@ class Finance(commands.Cog):
                 name="You owe", value="You don't owe anyone anything.", inline=False
             )
 
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await interaction.response.send_message(embed=embed)
 
 
 async def setup(bot: commands.Bot) -> None:
