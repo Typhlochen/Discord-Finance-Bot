@@ -37,6 +37,18 @@ async def init_db(pool: asyncpg.Pool) -> None:
                 ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ,
                 ADD COLUMN IF NOT EXISTS reminded   BOOLEAN NOT NULL DEFAULT FALSE
         """)
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS pending_payments (
+                message_id  BIGINT          PRIMARY KEY,
+                channel_id  BIGINT          NOT NULL,
+                creditor_id BIGINT          NOT NULL,
+                debtor_id   BIGINT          NOT NULL,
+                amount      DECIMAL(12, 2)  NOT NULL CHECK (amount > 0),
+                expires_at  TIMESTAMPTZ     NOT NULL,
+                reminded    BOOLEAN         NOT NULL DEFAULT FALSE,
+                created_at  TIMESTAMPTZ     NOT NULL DEFAULT NOW()
+            )
+        """)
 
 
 # ---------- pending requests ----------
@@ -105,6 +117,72 @@ async def get_expired_requests(pool: asyncpg.Pool) -> list[asyncpg.Record]:
     async with pool.acquire() as conn:
         return await conn.fetch(
             "SELECT * FROM pending_requests WHERE expires_at <= NOW()"
+        )
+
+
+# ---------- pending payments ----------
+
+async def add_pending_payment(
+    pool: asyncpg.Pool,
+    *,
+    message_id: int,
+    channel_id: int,
+    creditor_id: int,
+    debtor_id: int,
+    amount: float,
+    expires_at,
+) -> None:
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO pending_payments
+                (message_id, channel_id, creditor_id, debtor_id, amount, expires_at)
+            VALUES ($1, $2, $3, $4, $5, $6)
+            """,
+            message_id, channel_id, creditor_id, debtor_id, amount, expires_at,
+        )
+
+
+async def get_pending_payment(
+    pool: asyncpg.Pool, message_id: int
+) -> asyncpg.Record | None:
+    async with pool.acquire() as conn:
+        return await conn.fetchrow(
+            "SELECT * FROM pending_payments WHERE message_id = $1", message_id
+        )
+
+
+async def delete_pending_payment(pool: asyncpg.Pool, message_id: int) -> None:
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "DELETE FROM pending_payments WHERE message_id = $1", message_id
+        )
+
+
+async def get_payments_to_remind(pool: asyncpg.Pool) -> list[asyncpg.Record]:
+    async with pool.acquire() as conn:
+        return await conn.fetch(
+            """
+            SELECT * FROM pending_payments
+            WHERE reminded = FALSE
+              AND expires_at <= NOW() + INTERVAL '1 hour'
+              AND expires_at > NOW()
+            """
+        )
+
+
+async def mark_payment_reminded(pool: asyncpg.Pool, message_id: int) -> None:
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE pending_payments SET reminded = TRUE WHERE message_id = $1",
+            message_id,
+        )
+
+
+async def get_expired_payments(pool: asyncpg.Pool) -> list[asyncpg.Record]:
+    async with pool.acquire() as conn:
+        return await conn.fetch(
+            "SELECT * FROM pending_payments WHERE expires_at <= NOW()"
         )
 
 

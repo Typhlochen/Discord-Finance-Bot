@@ -8,8 +8,10 @@ import database as db
 
 EXPIRY_DAYS = 1
 
-CONFIRM_ID = "confirm_debt"
-DENY_ID    = "deny_debt"
+CONFIRM_ID         = "confirm_debt"
+DENY_ID            = "deny_debt"
+CONFIRM_PAY_ID     = "confirm_payment"
+DENY_PAY_ID        = "deny_payment"
 
 
 class ConfirmDebtView(discord.ui.View):
@@ -102,6 +104,89 @@ class ConfirmDebtView(discord.ui.View):
         await interaction.response.edit_message(embed=embed, view=None)
 
 
+class ConfirmPaymentView(discord.ui.View):
+    """Persistent view for payment confirmations. Only the creditor can respond."""
+
+    def __init__(self, bot: commands.Bot) -> None:
+        super().__init__(timeout=None)
+        self.bot = bot
+
+    @discord.ui.button(
+        label="Confirm Receipt", style=discord.ButtonStyle.green, custom_id=CONFIRM_PAY_ID
+    )
+    async def confirm(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ) -> None:
+        payment = await db.get_pending_payment(
+            self.bot.db_pool, interaction.message.id
+        )
+        if payment is None:
+            await interaction.response.send_message(
+                "This payment has already been resolved.", ephemeral=True
+            )
+            return
+
+        if interaction.user.id != payment["creditor_id"]:
+            await interaction.response.send_message(
+                "Only the person receiving the payment can confirm it.",
+                ephemeral=True,
+            )
+            return
+
+        overpayment = await db.apply_payment(
+            self.bot.db_pool,
+            creditor_id=payment["creditor_id"],
+            debtor_id=payment["debtor_id"],
+            amount=float(payment["amount"]),
+        )
+        await db.delete_pending_payment(self.bot.db_pool, interaction.message.id)
+
+        paid = round(float(payment["amount"]) - overpayment, 2)
+        embed = discord.Embed(
+            title="Payment Confirmed",
+            description=(
+                f"<@{payment['creditor_id']}> confirmed receiving "
+                f"**${paid:,.2f}** from <@{payment['debtor_id']}>."
+            ),
+            color=discord.Color.green(),
+        )
+        await interaction.response.edit_message(embed=embed, view=None)
+
+    @discord.ui.button(
+        label="Deny", style=discord.ButtonStyle.red, custom_id=DENY_PAY_ID
+    )
+    async def deny(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ) -> None:
+        payment = await db.get_pending_payment(
+            self.bot.db_pool, interaction.message.id
+        )
+        if payment is None:
+            await interaction.response.send_message(
+                "This payment has already been resolved.", ephemeral=True
+            )
+            return
+
+        if interaction.user.id != payment["creditor_id"]:
+            await interaction.response.send_message(
+                "Only the person receiving the payment can deny it.",
+                ephemeral=True,
+            )
+            return
+
+        await db.delete_pending_payment(self.bot.db_pool, interaction.message.id)
+
+        embed = discord.Embed(
+            title="Payment Denied",
+            description=(
+                f"<@{payment['creditor_id']}> denied the payment of "
+                f"**${float(payment['amount']):,.2f}** from <@{payment['debtor_id']}>."
+            ),
+            color=discord.Color.red(),
+        )
+        await interaction.response.edit_message(embed=embed, view=None)
+
+
 class Finance(commands.Cog):
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
@@ -148,6 +233,40 @@ class Finance(commands.Cog):
                 except (discord.NotFound, discord.Forbidden):
                     pass
             await db.delete_pending_request(self.bot.db_pool, req["message_id"])
+
+        # 3. Send 1-hour warning for pending payments
+        payments_to_remind = await db.get_payments_to_remind(self.bot.db_pool)
+        for pay in payments_to_remind:
+            channel = self.bot.get_channel(pay["channel_id"])
+            if channel:
+                expires_ts = int(pay["expires_at"].timestamp())
+                await channel.send(
+                    f"<@{pay['creditor_id']}>, you have less than **1 hour** to confirm a "
+                    f"payment of **${float(pay['amount']):,.2f}** from "
+                    f"<@{pay['debtor_id']}>! It expires <t:{expires_ts}:R>."
+                )
+            await db.mark_payment_reminded(self.bot.db_pool, pay["message_id"])
+
+        # 4. Expire overdue payments
+        expired_payments = await db.get_expired_payments(self.bot.db_pool)
+        for pay in expired_payments:
+            channel = self.bot.get_channel(pay["channel_id"])
+            if channel:
+                try:
+                    msg = await channel.fetch_message(pay["message_id"])
+                    embed = discord.Embed(
+                        title="Payment Expired",
+                        description=(
+                            f"<@{pay['debtor_id']}>'s payment of "
+                            f"**${float(pay['amount']):,.2f}** to "
+                            f"<@{pay['creditor_id']}> expired without confirmation."
+                        ),
+                        color=discord.Color.light_grey(),
+                    )
+                    await msg.edit(embed=embed, view=None)
+                except (discord.NotFound, discord.Forbidden):
+                    pass
+            await db.delete_pending_payment(self.bot.db_pool, pay["message_id"])
 
     @check_pending_requests.before_loop
     async def before_check(self) -> None:
@@ -231,46 +350,45 @@ class Finance(commands.Cog):
         member: discord.Member,
         amount: float,
     ) -> None:
-        # Defer immediately so Discord doesn't time out during the DB call
-        await interaction.response.defer()
-
         if member.id == interaction.user.id:
-            await interaction.followup.send("You cannot pay yourself.", ephemeral=True)
+            await interaction.response.send_message(
+                "You cannot pay yourself.", ephemeral=True
+            )
             return
 
         if amount <= 0:
-            await interaction.followup.send("Amount must be greater than 0.", ephemeral=True)
+            await interaction.response.send_message(
+                "Amount must be greater than 0.", ephemeral=True
+            )
             return
 
-        overpayment = await db.apply_payment(
+        expires_at = datetime.now(timezone.utc) + timedelta(days=EXPIRY_DAYS)
+        expires_ts = int(expires_at.timestamp())
+
+        embed = discord.Embed(
+            title="Payment Confirmation Pending",
+            description=(
+                f"{member.mention}, {interaction.user.mention} is claiming to have paid "
+                f"you **${amount:,.2f}**.\n\n"
+                f"Press **Confirm Receipt** if you received it, or **Deny** if you didn't.\n"
+                f"Expires <t:{expires_ts}:R>."
+            ),
+            color=discord.Color.yellow(),
+        )
+
+        view = ConfirmPaymentView(self.bot)
+        await interaction.response.send_message(embed=embed, view=view)
+        msg = await interaction.original_response()
+
+        await db.add_pending_payment(
             self.bot.db_pool,
+            message_id=msg.id,
+            channel_id=msg.channel.id,
             creditor_id=member.id,
             debtor_id=interaction.user.id,
             amount=round(amount, 2),
+            expires_at=expires_at,
         )
-
-        if overpayment >= round(amount, 2):
-            await interaction.followup.send(
-                f"You have no recorded debt to {member.mention}.",
-                ephemeral=True,
-            )
-            return
-
-        paid = round(amount - overpayment, 2)
-        lines = [
-            f"{interaction.user.mention} paid **${paid:,.2f}** to {member.mention}."
-        ]
-        if overpayment > 0:
-            lines.append(
-                f"Note: **${overpayment:,.2f}** could not be applied because it exceeded your remaining debt."
-            )
-
-        embed = discord.Embed(
-            title="Payment Applied",
-            description="\n".join(lines),
-            color=discord.Color.green(),
-        )
-        await interaction.followup.send(embed=embed)
 
     # ------------------------------------------------------------------
     # /debts
