@@ -231,16 +231,15 @@ class Finance(commands.Cog):
         member: discord.Member,
         amount: float,
     ) -> None:
+        # Defer immediately so Discord doesn't time out during the DB call
+        await interaction.response.defer()
+
         if member.id == interaction.user.id:
-            await interaction.response.send_message(
-                "You cannot pay yourself.", ephemeral=True
-            )
+            await interaction.followup.send("You cannot pay yourself.", ephemeral=True)
             return
 
         if amount <= 0:
-            await interaction.response.send_message(
-                "Amount must be greater than 0.", ephemeral=True
-            )
+            await interaction.followup.send("Amount must be greater than 0.", ephemeral=True)
             return
 
         overpayment = await db.apply_payment(
@@ -251,7 +250,7 @@ class Finance(commands.Cog):
         )
 
         if overpayment >= round(amount, 2):
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 f"You have no recorded debt to {member.mention}.",
                 ephemeral=True,
             )
@@ -271,7 +270,7 @@ class Finance(commands.Cog):
             description="\n".join(lines),
             color=discord.Color.green(),
         )
-        await interaction.response.send_message(embed=embed)
+        await interaction.followup.send(embed=embed)
 
     # ------------------------------------------------------------------
     # /debts

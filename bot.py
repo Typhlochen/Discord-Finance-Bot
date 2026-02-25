@@ -38,6 +38,23 @@ class Bot(commands.Bot):
     async def on_ready(self) -> None:
         print(f"Logged in as {self.user} (ID: {self.user.id})")
 
+    async def on_error(self, event: str, *args, **kwargs) -> None:
+        import traceback
+        print(f"Unhandled error in {event}:")
+        traceback.print_exc()
+
+    async def on_tree_error(
+        self, interaction: discord.Interaction, error: Exception
+    ) -> None:
+        import traceback
+        print(f"Slash command error in /{interaction.command.name if interaction.command else '?'}:")
+        traceback.print_exc()
+        msg = "An unexpected error occurred. Please try again."
+        if not interaction.response.is_done():
+            await interaction.response.send_message(msg, ephemeral=True)
+        else:
+            await interaction.followup.send(msg, ephemeral=True)
+
     async def close(self) -> None:
         if self.db_pool:
             await self.db_pool.close()
