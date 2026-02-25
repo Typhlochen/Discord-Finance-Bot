@@ -1,8 +1,12 @@
+from datetime import datetime, timedelta, timezone
+
 import discord
 from discord import app_commands
-from discord.ext import commands
+from discord.ext import commands, tasks
 
 import database as db
+
+EXPIRY_DAYS = 1
 
 CONFIRM_ID = "confirm_debt"
 DENY_ID    = "deny_debt"
@@ -101,6 +105,53 @@ class ConfirmDebtView(discord.ui.View):
 class Finance(commands.Cog):
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
+        self.check_pending_requests.start()
+
+    def cog_unload(self) -> None:
+        self.check_pending_requests.cancel()
+
+    # ------------------------------------------------------------------
+    # Background task — runs every 5 minutes
+    # ------------------------------------------------------------------
+    @tasks.loop(minutes=5)
+    async def check_pending_requests(self) -> None:
+        # 1. Send 1-hour warning to debtors who haven't been reminded
+        to_remind = await db.get_requests_to_remind(self.bot.db_pool)
+        for req in to_remind:
+            channel = self.bot.get_channel(req["channel_id"])
+            if channel:
+                expires_ts = int(req["expires_at"].timestamp())
+                await channel.send(
+                    f"<@{req['debtor_id']}>, you have less than **1 hour** to respond to a "
+                    f"debt request of **${float(req['amount']):,.2f}** from "
+                    f"<@{req['creditor_id']}>! It expires <t:{expires_ts}:R>."
+                )
+            await db.mark_reminded(self.bot.db_pool, req["message_id"])
+
+        # 2. Expire overdue requests
+        expired = await db.get_expired_requests(self.bot.db_pool)
+        for req in expired:
+            channel = self.bot.get_channel(req["channel_id"])
+            if channel:
+                try:
+                    msg = await channel.fetch_message(req["message_id"])
+                    embed = discord.Embed(
+                        title="Request Expired",
+                        description=(
+                            f"<@{req['creditor_id']}>'s request of "
+                            f"**${float(req['amount']):,.2f}** from "
+                            f"<@{req['debtor_id']}> expired without a response."
+                        ),
+                        color=discord.Color.light_grey(),
+                    )
+                    await msg.edit(embed=embed, view=None)
+                except (discord.NotFound, discord.Forbidden):
+                    pass
+            await db.delete_pending_request(self.bot.db_pool, req["message_id"])
+
+    @check_pending_requests.before_loop
+    async def before_check(self) -> None:
+        await self.bot.wait_until_ready()
 
     # ------------------------------------------------------------------
     # /request
@@ -133,17 +184,20 @@ class Finance(commands.Cog):
             )
             return
 
+        expires_at = datetime.now(timezone.utc) + timedelta(days=EXPIRY_DAYS)
+        expires_ts = int(expires_at.timestamp())
+
         note_text = f" \u2014 *{note}*" if note else ""
         embed = discord.Embed(
             title="Debt Confirmation Pending",
             description=(
                 f"{member.mention}, {interaction.user.mention} is requesting "
                 f"**${amount:,.2f}** from you{note_text}.\n\n"
-                f"Press **Confirm** if you agree, or **Deny** to reject."
+                f"Press **Confirm** if you agree, or **Deny** to reject.\n"
+                f"Expires <t:{expires_ts}:R>."
             ),
             color=discord.Color.yellow(),
         )
-        embed.set_footer(text="This request will remain open until resolved.")
 
         view = ConfirmDebtView(self.bot)
         await interaction.response.send_message(embed=embed, view=view)
@@ -157,6 +211,7 @@ class Finance(commands.Cog):
             debtor_id=member.id,
             amount=round(amount, 2),
             note=note,
+            expires_at=expires_at,
         )
 
     # ------------------------------------------------------------------

@@ -26,8 +26,16 @@ async def init_db(pool: asyncpg.Pool) -> None:
                 debtor_id   BIGINT          NOT NULL,
                 amount      DECIMAL(12, 2)  NOT NULL CHECK (amount > 0),
                 note        TEXT,
+                expires_at  TIMESTAMPTZ     NOT NULL,
+                reminded    BOOLEAN         NOT NULL DEFAULT FALSE,
                 created_at  TIMESTAMPTZ     NOT NULL DEFAULT NOW()
             )
+        """)
+        # Safe migrations for tables that already exist without these columns
+        await conn.execute("""
+            ALTER TABLE pending_requests
+                ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ,
+                ADD COLUMN IF NOT EXISTS reminded   BOOLEAN NOT NULL DEFAULT FALSE
         """)
 
 
@@ -42,15 +50,16 @@ async def add_pending_request(
     debtor_id: int,
     amount: float,
     note: str | None,
+    expires_at,
 ) -> None:
     async with pool.acquire() as conn:
         await conn.execute(
             """
             INSERT INTO pending_requests
-                (message_id, channel_id, creditor_id, debtor_id, amount, note)
-            VALUES ($1, $2, $3, $4, $5, $6)
+                (message_id, channel_id, creditor_id, debtor_id, amount, note, expires_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
             """,
-            message_id, channel_id, creditor_id, debtor_id, amount, note,
+            message_id, channel_id, creditor_id, debtor_id, amount, note, expires_at,
         )
 
 
@@ -67,6 +76,35 @@ async def delete_pending_request(pool: asyncpg.Pool, message_id: int) -> None:
     async with pool.acquire() as conn:
         await conn.execute(
             "DELETE FROM pending_requests WHERE message_id = $1", message_id
+        )
+
+
+async def get_requests_to_remind(pool: asyncpg.Pool) -> list[asyncpg.Record]:
+    """Requests expiring within 1 hour that haven't been reminded yet."""
+    async with pool.acquire() as conn:
+        return await conn.fetch(
+            """
+            SELECT * FROM pending_requests
+            WHERE reminded = FALSE
+              AND expires_at <= NOW() + INTERVAL '1 hour'
+              AND expires_at > NOW()
+            """
+        )
+
+
+async def mark_reminded(pool: asyncpg.Pool, message_id: int) -> None:
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE pending_requests SET reminded = TRUE WHERE message_id = $1",
+            message_id,
+        )
+
+
+async def get_expired_requests(pool: asyncpg.Pool) -> list[asyncpg.Record]:
+    """Requests whose expiration time has passed."""
+    async with pool.acquire() as conn:
+        return await conn.fetch(
+            "SELECT * FROM pending_requests WHERE expires_at <= NOW()"
         )
 
 
