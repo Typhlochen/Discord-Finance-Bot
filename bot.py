@@ -30,6 +30,9 @@ class Bot(commands.Bot):
         self.add_view(ConfirmDebtView(self))
         self.add_view(ConfirmPaymentView(self))
 
+        # Wire the app command error handler (must be explicit in discord.py 2.x)
+        self.tree.on_error = self.on_tree_error
+
         # Sync slash commands globally (can take up to 1 hour to propagate).
         # For instant updates during development, sync to a specific guild:
         #   await self.tree.sync(guild=discord.Object(id=YOUR_GUILD_ID))

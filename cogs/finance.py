@@ -350,16 +350,14 @@ class Finance(commands.Cog):
         member: discord.Member,
         amount: float,
     ) -> None:
+        await interaction.response.defer()
+
         if member.id == interaction.user.id:
-            await interaction.response.send_message(
-                "You cannot pay yourself.", ephemeral=True
-            )
+            await interaction.followup.send("You cannot pay yourself.", ephemeral=True)
             return
 
         if amount <= 0:
-            await interaction.response.send_message(
-                "Amount must be greater than 0.", ephemeral=True
-            )
+            await interaction.followup.send("Amount must be greater than 0.", ephemeral=True)
             return
 
         expires_at = datetime.now(timezone.utc) + timedelta(days=EXPIRY_DAYS)
@@ -377,8 +375,7 @@ class Finance(commands.Cog):
         )
 
         view = ConfirmPaymentView(self.bot)
-        await interaction.response.send_message(embed=embed, view=view)
-        msg = await interaction.original_response()
+        msg = await interaction.followup.send(embed=embed, view=view, wait=True)
 
         await db.add_pending_payment(
             self.bot.db_pool,
