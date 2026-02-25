@@ -25,23 +25,36 @@ class ConfirmDebtView(discord.ui.View):
         super().__init__(timeout=None)
         self.bot = bot
 
+    async def on_error(
+        self, interaction: discord.Interaction, error: Exception, item: discord.ui.Item
+    ) -> None:
+        import traceback
+        traceback.print_exc()
+        msg = "An error occurred. Please try again."
+        if not interaction.response.is_done():
+            await interaction.response.send_message(msg, ephemeral=True)
+        else:
+            await interaction.followup.send(msg, ephemeral=True)
+
     @discord.ui.button(
         label="Confirm", style=discord.ButtonStyle.green, custom_id=CONFIRM_ID
     )
     async def confirm(
         self, interaction: discord.Interaction, button: discord.ui.Button
     ) -> None:
+        await interaction.response.defer()
+
         request = await db.get_pending_request(
             self.bot.db_pool, interaction.message.id
         )
         if request is None:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "This request has already been resolved.", ephemeral=True
             )
             return
 
         if interaction.user.id != request["debtor_id"]:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "Only the person being charged can confirm this request.",
                 ephemeral=True,
             )
@@ -66,7 +79,7 @@ class ConfirmDebtView(discord.ui.View):
             ),
             color=discord.Color.green(),
         )
-        await interaction.response.edit_message(embed=embed, view=None)
+        await interaction.edit_original_response(embed=embed, view=None)
 
     @discord.ui.button(
         label="Deny", style=discord.ButtonStyle.red, custom_id=DENY_ID
@@ -74,17 +87,19 @@ class ConfirmDebtView(discord.ui.View):
     async def deny(
         self, interaction: discord.Interaction, button: discord.ui.Button
     ) -> None:
+        await interaction.response.defer()
+
         request = await db.get_pending_request(
             self.bot.db_pool, interaction.message.id
         )
         if request is None:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "This request has already been resolved.", ephemeral=True
             )
             return
 
         if interaction.user.id != request["debtor_id"]:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "Only the person being charged can deny this request.",
                 ephemeral=True,
             )
@@ -101,7 +116,7 @@ class ConfirmDebtView(discord.ui.View):
             ),
             color=discord.Color.red(),
         )
-        await interaction.response.edit_message(embed=embed, view=None)
+        await interaction.edit_original_response(embed=embed, view=None)
 
 
 class ConfirmPaymentView(discord.ui.View):
@@ -111,23 +126,36 @@ class ConfirmPaymentView(discord.ui.View):
         super().__init__(timeout=None)
         self.bot = bot
 
+    async def on_error(
+        self, interaction: discord.Interaction, error: Exception, item: discord.ui.Item
+    ) -> None:
+        import traceback
+        traceback.print_exc()
+        msg = "An error occurred. Please try again."
+        if not interaction.response.is_done():
+            await interaction.response.send_message(msg, ephemeral=True)
+        else:
+            await interaction.followup.send(msg, ephemeral=True)
+
     @discord.ui.button(
         label="Confirm Receipt", style=discord.ButtonStyle.green, custom_id=CONFIRM_PAY_ID
     )
     async def confirm(
         self, interaction: discord.Interaction, button: discord.ui.Button
     ) -> None:
+        await interaction.response.defer()
+
         payment = await db.get_pending_payment(
             self.bot.db_pool, interaction.message.id
         )
         if payment is None:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "This payment has already been resolved.", ephemeral=True
             )
             return
 
         if interaction.user.id != payment["creditor_id"]:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "Only the person receiving the payment can confirm it.",
                 ephemeral=True,
             )
@@ -150,7 +178,7 @@ class ConfirmPaymentView(discord.ui.View):
             ),
             color=discord.Color.green(),
         )
-        await interaction.response.edit_message(embed=embed, view=None)
+        await interaction.edit_original_response(embed=embed, view=None)
 
     @discord.ui.button(
         label="Deny", style=discord.ButtonStyle.red, custom_id=DENY_PAY_ID
@@ -158,17 +186,19 @@ class ConfirmPaymentView(discord.ui.View):
     async def deny(
         self, interaction: discord.Interaction, button: discord.ui.Button
     ) -> None:
+        await interaction.response.defer()
+
         payment = await db.get_pending_payment(
             self.bot.db_pool, interaction.message.id
         )
         if payment is None:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "This payment has already been resolved.", ephemeral=True
             )
             return
 
         if interaction.user.id != payment["creditor_id"]:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "Only the person receiving the payment can deny it.",
                 ephemeral=True,
             )
@@ -184,7 +214,7 @@ class ConfirmPaymentView(discord.ui.View):
             ),
             color=discord.Color.red(),
         )
-        await interaction.response.edit_message(embed=embed, view=None)
+        await interaction.edit_original_response(embed=embed, view=None)
 
 
 class Finance(commands.Cog):
