@@ -418,6 +418,63 @@ class Finance(commands.Cog):
         )
 
     # ------------------------------------------------------------------
+    # /clear
+    # ------------------------------------------------------------------
+    @app_commands.command(
+        name="clear",
+        description="Forgive debt a member owes you.",
+    )
+    @app_commands.describe(
+        member="The member whose debt you want to clear",
+        amount="Amount to clear (leave blank to clear everything they owe you)",
+    )
+    async def clear(
+        self,
+        interaction: discord.Interaction,
+        member: discord.Member,
+        amount: float | None = None,
+    ) -> None:
+        await interaction.response.defer()
+
+        if member.id == interaction.user.id:
+            await interaction.followup.send("You cannot clear your own debt.", ephemeral=True)
+            return
+
+        if amount is not None and amount <= 0:
+            await interaction.followup.send("Amount must be greater than 0.", ephemeral=True)
+            return
+
+        cleared = await db.clear_debt(
+            self.bot.db_pool,
+            creditor_id=interaction.user.id,
+            debtor_id=member.id,
+            amount=round(amount, 2) if amount is not None else None,
+        )
+
+        if cleared == 0:
+            await interaction.followup.send(
+                f"{member.mention} doesn't owe you anything.", ephemeral=True
+            )
+            return
+
+        if amount is None:
+            description = (
+                f"{interaction.user.mention} cleared **all** debt from {member.mention} "
+                f"(**${cleared:,.2f}** forgiven)."
+            )
+        else:
+            description = (
+                f"{interaction.user.mention} cleared **${cleared:,.2f}** of debt from {member.mention}."
+            )
+
+        embed = discord.Embed(
+            title="Debt Cleared",
+            description=description,
+            color=discord.Color.blurple(),
+        )
+        await interaction.followup.send(embed=embed)
+
+    # ------------------------------------------------------------------
     # /debts
     # ------------------------------------------------------------------
     @app_commands.command(

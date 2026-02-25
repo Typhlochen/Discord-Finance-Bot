@@ -188,6 +188,60 @@ async def get_expired_payments(pool: asyncpg.Pool) -> list[asyncpg.Record]:
 
 # ---------- write operations ----------
 
+async def clear_debt(
+    pool: asyncpg.Pool,
+    *,
+    creditor_id: int,
+    debtor_id: int,
+    amount: float | None,
+) -> float:
+    """
+    Forgive debt owed by debtor_id to creditor_id.
+    If amount is None, clear everything and return the total cleared.
+    If amount is given, clear oldest entries first up to that amount and
+    return how much was actually cleared.
+    """
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            if amount is None:
+                total = await conn.fetchval(
+                    "SELECT COALESCE(SUM(amount), 0) FROM debts "
+                    "WHERE creditor_id = $1 AND debtor_id = $2",
+                    creditor_id, debtor_id,
+                )
+                await conn.execute(
+                    "DELETE FROM debts WHERE creditor_id = $1 AND debtor_id = $2",
+                    creditor_id, debtor_id,
+                )
+                return float(total)
+
+            rows = await conn.fetch(
+                """
+                SELECT id, amount FROM debts
+                WHERE creditor_id = $1 AND debtor_id = $2
+                ORDER BY created_at ASC
+                FOR UPDATE
+                """,
+                creditor_id, debtor_id,
+            )
+            remaining = amount
+            for row in rows:
+                if remaining <= 0:
+                    break
+                row_amount = float(row["amount"])
+                if remaining >= row_amount:
+                    remaining -= row_amount
+                    await conn.execute("DELETE FROM debts WHERE id = $1", row["id"])
+                else:
+                    await conn.execute(
+                        "UPDATE debts SET amount = amount - $1 WHERE id = $2",
+                        remaining, row["id"],
+                    )
+                    remaining = 0
+
+            return round(amount - remaining, 2)
+
+
 async def add_debt(
     pool: asyncpg.Pool,
     *,
